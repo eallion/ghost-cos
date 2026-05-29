@@ -1,151 +1,163 @@
-/**
- * Created by ChengZheLin on 2019/5/10.
- * Features:
- */
-
 'use strict'
+
 const COS = require('cos-nodejs-sdk-v5')
 const BaseAdapter = require('ghost-storage-base')
-const URL = require('url')
-// const RE = /(.*)(?=\/ghost\/content)/
+const { URL } = require('url')
+const path = require('path')
+const crypto = require('crypto')
+const fs = require('fs')
 
-class QCloudCustomAdapter extends BaseAdapter {
-  constructor (config) {
+class GhostCOSAdapter extends BaseAdapter {
+  constructor(config) {
     super()
 
-    let cfg = config || {};
+    const cfg = config || {}
+    console.log('[ghost-cos] adapter loaded, baseUrl:', cfg.baseUrl)
 
-    if (!config || !config?.baseUrl) {
-      const env = process.env;
-      cfg = {
-        "baseUrl": env.GHOST_STORAGE_ADAPTER_COS_BASEURL,
-        "basePath": env.GHOST_STORAGE_ADAPTER_COS_BASEPATH,
-        "rename": env.GHOST_STORAGE_ADAPTER_COS_RENAME === 'true',
-        "SecretId": env.GHOST_STORAGE_ADAPTER_COS_SECRETID,
-        "SecretKey": env.GHOST_STORAGE_ADAPTER_COS_SECRETKEY,
-        "Bucket": env.GHOST_STORAGE_ADAPTER_COS_BUCKET,
-        "Region": env.GHOST_STORAGE_ADAPTER_COS_REGION
-      }
-    }
-  
     this.baseParams = {
       Bucket: cfg.Bucket,
       Region: cfg.Region
     }
 
-    this.baseUrl = cfg.baseUrl
+    this.rawBaseUrl = cfg.baseUrl || ''
     this.basePath = cfg.basePath || '/ghost/content/images/'
     this.rename = cfg.rename || false
 
     this.cos = new COS({
       SecretId: cfg.SecretId,
-      SecretKey: cfg.SecretKey
+      SecretKey: cfg.SecretKey,
+      ForcePathStyle: cfg.forcePathStyle || false,
+      Timeout: cfg.timeout || 30000
     })
   }
 
-  exists (fileName, targetDir) {
-    const fileUrl = path.join(targetDir || this.storagePath, fileName)
-
-    const url = new URL(fileUrl);
-    const Key = url.pathname
-
-    return new Promise((resolve, reject) => {
-      this.cos.headObject({
-        ...this.baseParams,
-        Key
-      }, (err, data) => {
-        if (err) {
-          err.statusCode
-            ? resolve(false)
-            : reject(err)
-        } else {
-          data.statusCode === 200
-            ? resolve(true)
-            : resolve(false)
-        }
-      })
-    })
-  }
-
-  save (file) {
-    return new Promise((resolve, reject) => {
-      this.cos.sliceUploadFile({
-        ...this.baseParams,
-        Key: this.generatePushKey(file),
-        FilePath: file.path
-      }, (err, data) => {
-        if (err) {
-          reject(err)
-        } else {
-          let url = this.baseUrl
-            ? data.Location.replace(/.*\.com\//, this.baseUrl)
-            : '//' + data.Location
-
-          resolve(url)
-        }
-      })
-    })
-  }
-
-  generatePushKey (file) {
-    const date = new Date()
-    let YY = date.getFullYear()
-    let MM = date.getMonth() + 1
-    if (MM <= 9) { MM = '0' + MM }
-
-    if (this.rename) {
-      return `${this.basePath}${YY}/${MM}/${file.filename.replace(/\s+/img, '').substring(0, 16)}${file.ext}`
-    } else {
-      return `${this.basePath}${YY}/${MM}/${file.name}`
+  _normalizeBaseUrl(url) {
+    if (!url) return ''
+    url = url.trim()
+    if (url.match(/^https?:\/\//i)) {
+      return url.replace(/\/+$/, '')
     }
+    return 'https://' + url.replace(/\/+$/, '')
   }
 
-  serve () {
-    return function customServe (req, res, next) {
+  _getBaseUrl() {
+    return this._normalizeBaseUrl(this.rawBaseUrl)
+  }
+
+  async exists(fileName, targetDir) {
+    const Key = this._resolveKey(fileName, targetDir)
+
+    return new Promise((resolve) => {
+      this.cos.headObject(
+        { ...this.baseParams, Key },
+        (err, data) => {
+          resolve(!!(data && data.statusCode === 200))
+        }
+      )
+    })
+  }
+
+  async save(file, targetDir) {
+    const Key = this._generateKey(file, targetDir)
+
+    return new Promise((resolve, reject) => {
+      this.cos.sliceUploadFile(
+        { ...this.baseParams, Key, FilePath: file.path },
+        (err, data) => {
+          if (err) {
+            reject(err)
+          } else {
+            const baseUrl = this._getBaseUrl()
+            const url = baseUrl ? baseUrl + Key : '//' + data.Location
+            resolve(url)
+          }
+        }
+      )
+    })
+  }
+
+  async delete(fileName, targetDir) {
+    const Key = this._resolveKey(fileName, targetDir)
+
+    return new Promise((resolve, reject) => {
+      this.cos.deleteObject(
+        { ...this.baseParams, Key },
+        (err, data) => {
+          if (err) {
+            reject(err)
+          } else {
+            resolve(data.statusCode >= 200 && data.statusCode < 300)
+          }
+        }
+      )
+    })
+  }
+
+  async read(options) {
+    let Key
+    try {
+      Key = new URL(options.path).pathname
+    } catch {
+      Key = options.path
+    }
+
+    return new Promise((resolve, reject) => {
+      this.cos.getObject(
+        { ...this.baseParams, Key },
+        (err, data) => {
+          if (err || data?.error) {
+            return reject(new Error(`Could not read image: ${Key}`))
+          }
+          resolve(data.Body)
+        }
+      )
+    })
+  }
+
+  serve() {
+    return function customServe(req, res, next) {
       next()
     }
   }
 
-  delete () {
-    return Promise.reject('not implemented')
-    /*return new Promise((resolve, reject) => {
-      this.cos.deleteObject({
-        ...this.bsseParams,
-        key
-      }, function (err, data) {
-        if (err) {
-          reject(err)
-        } else {
-          (data.statusCode < 300 && data.statusCode >= 200)
-            ? resolve(true)
-            : resolve(false)
-        }
-      })
-    })*/
+  _resolveKey(fileName, targetDir) {
+    if (!fileName) return ''
+
+    if (fileName.startsWith('http://') || fileName.startsWith('https://') || fileName.startsWith('//')) {
+      try {
+        const url = new URL(fileName, 'http://localhost')
+        return url.pathname
+      } catch {}
+    }
+
+    if (fileName.startsWith('/')) {
+      return fileName
+    }
+
+    if (targetDir) {
+      return ('/' + targetDir + '/' + fileName).replace(/\/+/g, '/')
+    }
+
+    return '/' + fileName
   }
 
-  read (options) {
-    // const Key = options.path.replace(this.baseUrl, '')
-    const Key = new URL(options.path).pathname
+  _generateKey(file, targetDir) {
+    const date = new Date()
+    const YY = date.getFullYear()
+    const MM = String(date.getMonth() + 1).padStart(2, '0')
 
-    return new Promise((resolve, reject) => {
-      this.cos.getObject({
-        ...this.baseParams,
-        Key
-      }, (err, data) => {
-        if (err || data.error) {
-          return reject(new Error(`
-          Could not read image \n ${Key}
-          error: ${JSON.stringify(err)}
-          response: ${JSON.stringify(data)}
-          `))
-        }
-        resolve(data.Body)
-      })
-    })
+    const ext = path.extname(file.name || '')
+    let hash
+    try {
+      const buf = fs.readFileSync(file.path)
+      hash = crypto.createHash('md5').update(buf).digest('hex').substring(0, 12)
+    } catch {
+      hash = 'unnamed'
+    }
 
+    return `${this.basePath}${YY}/${MM}/${hash}${ext}`
   }
 }
 
-exports.default = QCloudCustomAdapter;
-module.exports = QCloudCustomAdapter;
+module.exports = GhostCOSAdapter
+exports.default = GhostCOSAdapter

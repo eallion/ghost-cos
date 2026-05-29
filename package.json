@@ -1,19 +1,18 @@
 {
-  "name": "ghost-qcloud-cos",
-  "version": "2.0.3",
-  "description": "This Ghost custom storage module allows you to store media file with Tencent Cloud OSS instead of storing at local machine.",
+  "name": "ghost-cos",
+  "version": "3.2.0",
+  "description": "Tencent Cloud COS storage adapter for Ghost 6.42.x+",
   "main": "index.js",
   "dependencies": {
-    "cos-nodejs-sdk-v5": "^2.11.9",
-    "ghost-storage-base": "^1.0.0"
+    "cos-nodejs-sdk-v5": "^2.14.0",
+    "ghost-storage-base": "^1.1.2"
   },
-  "devDependencies": {},
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ZhelinCheng/ghost-qcloud-cos.git"
+    "url": "git+https://github.com/eallion/ghost-cos.git"
   },
   "keywords": [
     "ghost-storage-adapter",
@@ -23,10 +22,10 @@
     "cos",
     "qcloud"
   ],
-  "author": "ZhelinCheng",
+  "author": "Charles Chin",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/ZhelinCheng/ghost-qcloud-cos/issues"
+    "url": "https://github.com/eallion/ghost-cos/issues"
   },
-  "homepage": "https://github.com/ZhelinCheng/ghost-qcloud-cos#readme"
+  "homepage": "https://github.com/eallion/ghost-cos#readme"
 }

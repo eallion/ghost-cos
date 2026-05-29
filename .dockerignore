@@ -1,0 +1,11 @@
+node_modules
+.env
+.idea
+.git
+.github
+docs
+test
+*.md
+LICENSE
+yarn.lock
+.dockerignore
