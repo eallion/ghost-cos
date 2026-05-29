@@ -1,0 +1,56 @@
+name: Check Ghost Version
+
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-tags: true
+
+      - name: Get current version tag
+        id: current
+        run: |
+          TAG=$(git tag | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+' | sort -V | tail -1)
+          echo "tag=${TAG:-v0.0.0}" >> $GITHUB_OUTPUT
+
+      - name: Get latest Ghost version from GitHub
+        id: github
+        run: |
+          VERSION=$(curl -sL \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/TryGhost/Ghost/releases/latest \
+            | jq -r '.tag_name' | sed 's/^v//')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Check Docker Hub image availability
+        id: docker
+        run: |
+          VERSION="${{ steps.github.outputs.version }}"
+          TOKEN=$(curl -s "https://auth.docker.io/token?service=registry.docker.io&scope=repository:library/ghost:pull" | jq -r '.token')
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer $TOKEN" \
+            "https://registry-1.docker.io/v2/library/ghost/manifests/$VERSION")
+          echo "Docker Hub ghost:$VERSION HTTP $HTTP_CODE"
+          echo "available=$([ "$HTTP_CODE" = "200" ] && echo true || echo false)" >> $GITHUB_OUTPUT
+
+      - name: Create tag if new version detected and Docker image is available
+        if: ${{ steps.docker.outputs.available == 'true' }}
+        run: |
+          CURRENT="${{ steps.current.outputs.tag }}"
+          LATEST="v${{ steps.github.outputs.version }}"
+          HIGHEST=$(printf '%s\n' "$CURRENT" "$LATEST" | sort -V | tail -1)
+          if [ "$HIGHEST" = "$LATEST" ] && [ "$CURRENT" != "$LATEST" ]; then
+            git config user.name "github-actions"
+            git config user.email "actions@github.com"
+            git tag "$LATEST"
+            git push origin "$LATEST"
+          fi
